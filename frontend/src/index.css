@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background-color: #F6F4EE;
+  color: #13211B;
+}
+
+.step-num {
+  font-family: 'JetBrains Mono', monospace;
+}

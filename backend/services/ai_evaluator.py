@@ -2,15 +2,13 @@ import json
 import os
 import requests
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-# Any OpenRouter-supported model works here. Pick one based on cost/quality tradeoff.
-# Examples: "anthropic/claude-sonnet-4-6", "openai/gpt-4o-mini", "google/gemini-2.0-flash-001"
-MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-4-6")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 
 def _safe_json_parse(text: str) -> dict:
+    original_text = text
     text = text.strip()
     if text.startswith("```"):
         text = text.strip("`")
@@ -31,7 +29,7 @@ def _safe_json_parse(text: str) -> dict:
             "jd_match_score": 0,
             "strengths": [],
             "gaps": ["AI evaluation failed to parse"],
-            "explanation": "Could not parse AI response."
+            "explanation": f"Could not parse AI response. Raw output: {original_text[:300]!r}"
         }
 
 
@@ -44,12 +42,12 @@ def evaluate_resume(resume_text: str, jd_text: str, candidate_meta: dict) -> dic
             "explanation": resume_text
         }
 
-    if not OPENROUTER_API_KEY:
+    if not GEMINI_API_KEY:
         return {
             "jd_match_score": 0,
             "strengths": [],
             "gaps": [],
-            "explanation": "OPENROUTER_API_KEY not set in environment."
+            "explanation": "GEMINI_API_KEY not set in environment."
         }
 
     prompt = f"""You are an expert technical recruiter evaluating a candidate against a job description.
@@ -80,24 +78,23 @@ Return ONLY valid JSON with this exact schema, no markdown fences, no preamble:
 
     try:
         response = requests.post(
-            OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "https://visl-screening.local"),
-                "X-Title": "Visl AI Candidate Screening",
-            },
+            GEMINI_URL,
+            params={"key": GEMINI_API_KEY},
+            headers={"Content-Type": "application/json"},
             json={
-                "model": MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 500,
-                "temperature": 0.2,
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "maxOutputTokens": 2048,
+                    "responseMimeType": "application/json",
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
             },
             timeout=60,
         )
         response.raise_for_status()
         data = response.json()
-        raw_text = data["choices"][0]["message"]["content"]
+        raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
         result = _safe_json_parse(raw_text)
         result["jd_match_score"] = float(result.get("jd_match_score", 0) or 0)
         return result
@@ -111,7 +108,14 @@ Return ONLY valid JSON with this exact schema, no markdown fences, no preamble:
             "jd_match_score": 0,
             "strengths": [],
             "gaps": [],
-            "explanation": f"OpenRouter API error: {error_body}"
+            "explanation": f"Gemini API error: {error_body}"
+        }
+    except (KeyError, IndexError) as e:
+        return {
+            "jd_match_score": 0,
+            "strengths": [],
+            "gaps": [],
+            "explanation": f"Gemini API returned an unexpected response shape: {e}. Raw: {str(data)[:500] if 'data' in dir() else 'no response'}"
         }
     except Exception as e:
         return {
